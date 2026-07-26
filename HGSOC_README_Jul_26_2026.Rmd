@@ -1,0 +1,53 @@
+# Uncovering Culture-Induced Gene Expression Changes in HGSOC Organoids
+
+**Course:** BINF 5503 – Data Analytics & Storytelling  
+**Authors:** Blair Steele & Ayushi Piplodiya  
+**Institution:** Faculty of Health Sciences & Wellness, Humber College  
+**Date:** July 28, 2026  
+
+---
+
+# Project Overview
+
+High-grade serous ovarian carcinoma (HGSOC) is the most common and lethal subtype of ovarian cancer. Patient-derived 3D organoids (PDOs) generated from malignant effusions serve as powerful models for precision drug screening, preserving native tumor architecture and patient-specific heterogeneity.
+
+However, transitioning primary cancer cells from the in vivo tumor microenvironment (malignant effusions) to in vitro culture conditions can trigger culture-induced transcriptomic adaptation. This project performs paired differential gene expression analysis across four HGSOC patient-derived organoid lines (`A778`, `A820`, `A870`, `A899`) at **Day 0** (baseline in vivo) and **Day 6** (short-term in vitro culture) to characterize this adaptation response.
+
+---
+
+# Research Question & Key Findings
+
+   * **Research Question:** How does short-term in vitro culture (Day 0 vs. Day 6) alter the transcriptomic profile of patient-derived HGSOC organoids?
+
+   * **Main Finding:** Transitioning to in vitro culture induces a significant shift away from hypoxia and stress-survival pathways toward active cell cycle progression, mitosis, and metabolic adaptation.
+   
+   * **Model Fidelity:** Principal Component Analysis (PCA) confirms that **inter-patient genetic heterogeneity (PC1: 38% variance)** remains the dominant driver of gene expression, proving that organoids preserve patient-specific characteristics over time despite culture-induced changes.
+
+---
+
+# Analysis Pipeline & Workflow
+
+   1. **Data Ingestion & Verification:** 
+      * Merged raw transcriptomic count matrices across 8 samples (4 patient lines × 2 timepoints; 58,725 genomic features).
+      * Conducted non-parametric verification (Shapiro-Wilk tests) confirming non-normal count distributions across all samples.
+   2. **Differential Expression Analysis:**
+      * Utilized `DESeq2` for paired experimental modeling (`design = ~ Patient + Day`).
+      * Filtered low-count reads ($\ge 10$ counts in at least 4 samples), retaining core expressed genes.
+   3. **Quality Control & Visualization:**
+      * Variance Stabilizing Transformation (`vst`) applied for exploratory clustering.
+      * Visualizations generated using `ggplot2`, `pheatmap`, and `ggrepel` (Volcano plots, PCA plots, and DEG heatmaps).
+
+---
+
+# Key Biological Results
+
+   * **Upregulated at Day 6 (Culture Adaptation & Mitosis):**
+   * *Top Genes:* `AURKA`, `S100A9`, `FANCI`, `NPAT`, `MMP25`, `PTTG1`
+   * *Enriched Pathways:* Mitotic spindle assembly, cell cycle G2/M phase transition, chromosome cohesion, and DNA replication.
+
+
+   * **Downregulated at Day 6 (Attenuation of In Vivo Stresses):**
+   * *Top Genes:* `FOSB`, `FOS`, `JUN`, `MGMT`, `EGR1`, `CXCL8`
+   * *Enriched Pathways:* Hypoxia response, acute inflammatory response, and microenvironmental stress signaling.
+
+---
