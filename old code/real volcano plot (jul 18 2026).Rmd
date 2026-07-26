@@ -1,0 +1,243 @@
+jul 18 2026 
+
+real volcano plot 
+
+```{r}
+
+#rewrite volcano plot
+
+# Extract Differential Expression results comparing Day 6 vs Day 0 baseline
+res <- results(dds, contrast = c("Day", "Day_6", "Day_0"))
+
+# Convert to dataframe and classify significance
+res_df <- as.data.frame(res) %>%
+  rownames_to_column(var = "gene_id") %>%
+  filter(!is.na(padj)) %>%
+  mutate(Significance = case_when(
+    padj < 0.05 & log2FoldChange > 1 ~ "Upregulated Genes (Day6)",
+    padj < 0.05 & log2FoldChange < -1 ~ "Downregulated Genes (Day6)",
+    TRUE ~ "Not Significant"
+  ))
+
+
+# Select top 10 upregulated genes
+top10_up <- res_df %>%
+  filter(Significance == "Upregulated Genes (Day6)") %>%
+  arrange(desc(log2FoldChange)) %>%
+  slice_head(n = 10)
+
+
+# Select top 10 downregulated genes
+top10_down <- res_df %>%
+  filter(Significance == "Downregulated Genes (Day6)") %>%
+  arrange(log2FoldChange) %>%
+  slice_head(n = 10)
+
+
+# Combine genes for labeling
+top_genes <- bind_rows(top10_up, top10_down)
+
+
+# Convert Ensembl IDs to gene symbols
+top_genes$gene_symbol <- mapIds(
+  org.Hs.eg.db,
+  keys = gsub("\\..*", "", top_genes$gene_id),
+  keytype = "ENSEMBL",
+  column = "SYMBOL",
+  multiVals = "first"
+)
+
+# Replace missing gene symbols with Ensembl IDs
+top_genes$gene_symbol <- ifelse(
+  is.na(top_genes$gene_symbol),
+  top_genes$gene_id,
+  top_genes$gene_symbol
+)
+
+
+# Create volcano plot
+volcano_plot <- ggplot(res_df,
+                       aes(x = log2FoldChange,
+                           y = -log10(padj),
+                           color = Significance)) +
+  
+  geom_point(alpha = 0.6, size = 1.5) +
+  
+  scale_color_manual(values = c(
+    "Upregulated Genes (Day6)" = "firebrick3",
+    "Downregulated Genes (Day6)" = "dodgerblue3",
+    "Not Significant" = "grey60"
+  )) +
+  
+  # Add significance thresholds
+  geom_hline(
+    yintercept = -log10(0.05),
+    linetype = "dashed",
+    color = "black",
+    alpha = 0.7
+  ) +
+  
+  geom_vline(
+    xintercept = c(-1, 1),
+    linetype = "dashed",
+    color = "black",
+    alpha = 0.7
+  ) +
+  
+  # Label top 10 upregulated/downregulated genes
+  geom_text_repel(
+    data = top_genes,
+    aes(label = gene_symbol),
+    size = 3,
+    max.overlaps = 20,
+    box.padding = 0.5,
+    point.padding = 0.3,
+    min.segment.length = 0
+  ) +
+  
+  labs(
+    title = "Volcano Plot of Differential Gene Expression",
+    subtitle = "Genes With The Strongest Transcriptomic Shifts (Day 6 v. Day 0)",
+    x = "Log2 Fold Change (LFC)",
+    y = "-Log10 Adjusted p-value (FDR)"
+  ) +
+  
+  theme_minimal(base_size = 13) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold")
+  )
+
+
+# Display plot
+print(volcano_plot)
+
+
+# Save volcano plot
+ggsave(
+  filename = "HGSOC_Day6_vs_Day0_VolcanoPlot_Top20_DEGs.png",
+  plot = volcano_plot,
+  width = 10,
+  height = 8,
+  dpi = 300
+)
+
+```
+
+
+
+
+
+
+
+
+my labelled volcano plot
+```{r}
+# Extract DGE results comparing Day 6 v. Day 0
+res <- results(dds, contrast = c("Day", "Day_6", "Day_0"))
+
+# Create dataframe with significances
+res_df <- as.data.frame(res) %>%
+  rownames_to_column(var = "gene_id") %>%
+  filter(!is.na(padj)) %>%
+  mutate(Significance = case_when(
+    padj < 0.05 & log2FoldChange > 1 ~ "Upregulated Genes (Day 6)",
+    padj < 0.05 & log2FoldChange < -1 ~ "Downregulated Genes (Day 6)",
+    TRUE ~ "Not Significant"
+  ))
+
+# Select Top 10 Upregulated Genes 
+top10_up <- res_df %>%
+  filter(Significance == "Upregulated Genes (Day 6)") %>%
+  arrange(desc(log2FoldChange)) %>%
+  slice_head(n = 10)
+
+# Select Top 10 Downregulated Genes 
+top10_down <- res_df %>%
+  filter(Significance == "Downregulated Genes (Day 6)") %>%
+  arrange(log2FoldChange) %>%
+  slice_head(n = 10)
+
+# Combine genes for labeling
+top_genes <- bind_rows(top10_up, top10_down)
+
+# Convert Ensembl IDs to gene symbols
+top_genes$gene_symbol <- mapIds(
+  org.Hs.eg.db,
+  keys = gsub("\\..*", "", top_genes$gene_id),
+  keytype = "ENSEMBL",
+  column = "SYMBOL",
+  multiVals = "first"
+)
+
+# Replace missing gene symbols w/ Ensembl IDs
+top_genes$gene_symbol <- ifelse(
+  is.na(top_genes$gene_symbol),
+  top_genes$gene_id,
+  top_genes$gene_symbol
+)
+
+# Create Volcano Plot
+volcano_plot <- ggplot(res_df,
+                       aes(x = log2FoldChange,
+                           y = -log10(padj),
+                           color = Significance)) +
+
+  geom_point(alpha = 0.6, size = 1.5) +
+
+  scale_color_manual(values = c(
+    "Upregulated Genes (Day6)" = "firebrick3",
+    "Downregulated Genes (Day6)" = "dodgerblue3",
+    "Not Significant" = "grey60"
+  )) + 
+
+  geom_hline(
+    yintercept = -log10(0.05),
+    linetype = "dashed",
+    color = "black",
+    alpha = 0.7
+  ) + 
+
+  geom_vline(
+    xintercept = c(-1, 1),
+    linetype = "dashed",
+    color = "black",
+    alpha = 0.7
+  ) + 
+
+# Label Top 10 Upregulated & Downregulated Genes
+
+  geom_text_repel(
+    data = top_genes,
+    aes(label = gene_symbol),
+    size = 3, 
+    max.overlaps = 20, 
+    box.padding = 0.5,
+    point.padding = 0.3, 
+    min.segment.length = 0
+  ) + 
+
+  labs(
+    title = "Volcano Plot of Differential Gene Expression",
+    subtitle = "Genes With The Strongest Transcriptomic Shifts (Day 6 v. Day 0)",
+    x = "Log2 Fold Change (LFC)",
+    y = "-Log10 Adjusted p-value (FDR)"
+  ) + 
+
+  theme_minimal(base_size = 13) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold")
+  )
+
+print(volcano_plot)
+
+# Save Volcano Plot
+ggsave(
+  filename = "HGSOC_Day6_v_Day0_VolcanoPlot_Top20_DEGs.png", 
+  plot = volcano_plot,
+  width = 10,
+  height = 8,
+  dpi = 300
+)
+```

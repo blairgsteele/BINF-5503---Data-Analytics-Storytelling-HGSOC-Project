@@ -1,0 +1,617 @@
+BINF 5503 - Data Analytics & Storytelling
+R Code for HGSOC Project
+Blair Steele 
+Ayushi Piplodiya
+July 28, 2026
+---------------------------------
+---------------------------------
+
+
+---------------------------------------------------
+★ INSTALL PACKAES & LOAD THE REQUIRED LIBRARIES ★
+---------------------------------------------------
+
+```{r}
+# Install Packages
+# BiocManager::install("DESeq2")
+# install.packages("BiocManager")
+# if (!requireNamespace("pheatmap", quietly = TRUE)) install.packages("pheatmap")
+# if (!requireNamespace("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# BiocManager::install("clusterProfiler")
+
+# Load Libraries
+library(tidyverse)
+library(rlang)
+library(DESeq2)
+library(dplyr)
+library(ggplot2)
+library(pheatmap)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+```
+
+---------------------------------
+★ PRELIMINARY EXPLORATORY ANALYSIS ★
+---------------------------------
+
+```{r}
+base_path <- "./read_counts/"
+output_dir <- "./"
+
+#Merge TSV Files
+files <- c(
+    "A778_D0_gene.tsv", "A778_D6_gene.tsv",
+    "A820_D0_gene.tsv", "A820_D6_gene.tsv",
+    "A870_D0_gene.tsv", "A870_D6_gene.tsv",
+    "A899_D0_gene.tsv", "A899_D6_gene.tsv"
+)
+
+#Extract sample names
+sample_names <- str_remove(files, "_gene\\.tsv")
+
+#standardize the files
+list_of_dfs <- map2(files, sample_names, function(file, sample_name) {
+    read_tsv(paste0(base_path, file), show_col_types = FALSE) %>%
+    rename(gene_id = 1, gene_name = 2, !!sample_name :=3) %>%
+    dplyr::select(gene_id, !!sample_name)
+})
+
+# Merge dataframes into one, by gene_id
+count_matrix_df <- purrr::reduce(list_of_dfs, left_join, by = "gene_id")
+
+#Format to matrix object for DESeq2
+count_matrix <- count_matrix_df %>%
+  column_to_rownames("gene_id") %>%
+  as.matrix()
+
+#Convert to dataframe for saving
+count_matrix %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "gene_id") %>%
+  write_csv(file = paste0(output_dir, "merged_count_matrix.csv"))
+
+```
+
+---------------------------------
+★ DATA INSPECTION & VERIFICATION ★
+---------------------------------
+
+```{r}
+head(count_matrix)
+View(count_matrix)
+dim(count_matrix) #58,725 rows x 8 columns
+str(count_matrix)
+colnames(count_matrix)
+summary(count_matrix)
+colSums(is.na(count_matrix))
+
+```
+
+---------------------------------
+★ CHECK FOR MISSING VALUES ★
+---------------------------------
+
+```{r}
+#Check for missing values (i.e., N/A's across the entire merged matrix)
+total_na_matrix <- sum(is.na(count_matrix))
+cat("Total missing values in the matrix:", total_na_matrix, "\n")
+
+#Missing values per column (i.e., per sample)
+na_by_sample <- colSums(is.na(count_matrix))
+print("Missing values per sample:")
+print(na_by_sample)
+
+#ID rows(genes) with missing values
+genes_with_na <- rownames(count_matrix)[rowSums(is.na(count_matrix)) > 0]
+
+#Safety check to see if vector has length > 0 (i.e., if any rows have missing data)
+if(length(genes_with_na) > 0) {
+  cat("\nFound", length(genes_with_na), "genes with missing data. First few:\n")
+  print(head(genes_with_na))
+} else {
+  cat("\nClean dataset: No genes have missing (N/A) count values!\n")
+}
+
+```
+
+★ Interpretation: 
+    - No genes have missing values (N/A's).
+    - '0 counts' are different from N/A's.
+    - 0 counts = 0 reads for a given sample after sequencing. Gene may be completely turned off or not expressed in given tumor organoid. Or the expression level of that given gene may be too low for the sequencer to detect.
+------------------------------------
+
+----------------------------------------
+★ FACETED/MERGED HISTOGRAMS FOR ALL SAMPLES ★
+Log-Transformation & Visualizing Transcriptome Count Distributions
+----------------------------------------
+
+```{r}
+#Convert matrix to long df for ggplot
+matrix_long <- count_matrix %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "gene_id") %>%
+  pivot_longer(
+    cols = -gene_id,
+    names_to = "Sample",
+    values_to = "Read_Count"
+  ) %>%
+
+  #Add metadata for coloring
+  mutate(
+    Day = if_else(str_detect(Sample, "D0"), "Day 0", "Day 6"),
+    Patient = str_extract(Sample, "A[0-9]+")
+  )
+
+#Plot multifaceted grid with all samples
+p_faceted <- ggplot(matrix_long, aes(x = log2(Read_Count + 1), fill = Day)) +
+  geom_histogram(bins = 50, colour = "white", alpha = 0.8) +
+  scale_fill_manual(values = c(
+    "Day 0" = "skyblue",
+    "Day 6" = "lightgreen"
+  )) +
+  facet_wrap(~ Sample, ncol = 4) +
+  labs(
+    title = "Transcriptome Count Distributions Across All Samples",
+    subtitle = "Comparing HGSOC Organoids at Day 0 v. Day 6",
+    x = "log2(Read Count + 1)",
+    y = "Number of Genes",
+    fill = "Timepoint"
+  ) +
+  theme_minimal() +
+  theme(
+    strip.background = element_rect(fill = "grey95", color = "grey80"),
+    strip.text = element_text(face = "bold"),
+    panel.spacing = unit(1, "lines")
+  )
+
+# Save multifaceted ggplot
+ggsave(
+    filename = paste0(output_dir, "Faceted_Histogram_All_Samples.png"),
+    plot = p_faceted, width = 12, height = 6, dpi = 300
+)
+
+print(p_faceted)
+```
+
+------------------------------------------------------------------------
+★ VISUALIZATION OF DISTRIBUTION OF ALL SAMPLES ★
+------------------------------------------------------------------------
+
+```{r}
+#Convert to long format for ggplot
+long_counts <- count_matrix %>%
+  as.data.frame() %>%
+  rownames_to_column(var="Gene") %>%
+  pivot_longer(cols=-Gene, names_to="Sample", values_to="Counts")
+
+#Plot density distribution for all samples
+ggplot(long_counts, aes(x=Counts, color=Sample)) +
+  geom_density(alpha=0.5) +
+  scale_x_log10() +
+  theme_minimal() +
+  labs(title="Global Count Distribution Across All Samples",
+      x="Log10(Counts)",
+      y="Density")+
+  theme(legend.position="none")
+
+#Save ggplot
+# output_dir <- "./"
+
+ggsave(filename = file.path(output_dir, "Global_Count_Distribution.png"),
+      width = 7,
+      height = 5,
+      dpi = 300)
+
+```
+
+★ Interpretation:
+    1. The density distribution plot for all samples follows a bimodal distribution (two peaks). Non-symmetric. Deviates from normal Guassian bell curve.
+    2. This confirms non-normality. 
+------------------------------------
+
+------------------------------------------------------------------------
+★ SHAPIRO-TEST FOR ALL SAMPLES ★ 
+Tests for normality.
+------------------------------------------------------------------------
+
+```{r}
+#Test if read counts are normally distributed
+test_normality <- function(column_data) {
+  set.seed(42)
+
+  sample_size <- min(4000, length(column_data))
+  sample_data <- sample(column_data, sample_size)
+
+  res <- shapiro.test(sample_data)
+  return(res$p.value)
+
+}
+
+#Apply function to every column (i.e., all samples)
+all_p_values <- apply(count_matrix, MARGIN=2, FUN=test_normality)
+
+#Convert to datafrom
+normality_results <- data.frame(
+  Sample=names(all_p_values),
+  p_value=all_p_values,
+  Is_Normal=ifelse(all_p_values>0.05, "Yes", "No (Reject Null Hypothesis)")
+)
+
+print(normality_results)
+```
+
+★ Normality Test Results: 
+            Sample      p_value  Is_Normal
+    A778_D0 A778_D0 2.052916e-85 No (Reject Null Hypothesis)
+    A778_D6 A778_D6 6.628042e-85 No (Reject Null Hypothesis)
+    A820_D0 A820_D0 3.021601e-87 No (Reject Null Hypothesis)
+    A820_D6 A820_D6 4.599661e-87 No (Reject Null Hypothesis)
+    A870_D0 A870_D0 3.942424e-86 No (Reject Null Hypothesis)
+    A870_D6 A870_D6 1.444317e-85 No (Reject Null Hypothesis)
+    A899_D0 A899_D0 5.709202e-86 No (Reject Null Hypothesis)
+    A899_D6 A899_D6 2.983315e-85 No (Reject Null Hypothesis)
+
+★ Interpretation: 
+    1. All p-values are below 0.05 = Highly non-normal; rules out standard parametric tests. 
+    2. Strongly reject the null hypothesis (that states that the data is normally distributed). This means the data deviates drastically from a Gaussian bell curve.
+    3. Rules out standard parametric tests such as t-test, ANOVA & standard linear regression, that assume symmetric distribution. Parametric tests applied directly to raw count data would cause false positives to skyrocket, and statistical power to plummet. 
+    4. Perfect for DESeq2 that models the data using a Negative Binomial distribution
+------------------------------------
+
+--------------------------------------------------
+★ DIFFERENTIAL GENE EXPRESSION ANALYSIS (DESeq2) ★
+Paired Experimental Modeling
+--------------------------------------------------
+
+```{r deseq2-setup, message=FALSE, warning=FALSE}
+
+#Create metadata table using colnames
+metadata <- data.frame(
+  Sample_ID = colnames(count_matrix),
+  Patient = factor(str_extract(colnames(count_matrix), "A[0-9]+")),
+  Day = factor(if_else(str_detect(colnames(count_matrix), "D0"), "Day_0", "Day_6"),
+                levels=c("Day_0", "Day_6"))
+)
+
+#Assign values from Sample_ID column as row names of metadata dataframe.
+rownames(metadata) <- metadata$Sample_ID
+
+#Verify that matrix columns align with metadata rows
+stopifnot(all(colnames(count_matrix) == rownames(metadata)))
+
+#Build dds design formula
+dds <- DESeqDataSetFromMatrix(
+  countData = count_matrix,
+  colData = metadata,
+  design = ~ Patient + Day
+)
+
+#Pre-filter for low-count genes (only keep genes with >= 10 reads in at least 4 samples)
+keep <- rowSums(counts(dds) >= 10) >= 4
+dds <- dds[keep, ]
+
+#Genes remaining after low-read pre-filtering
+cat("Genes remaining after low-read pre-filtering:", nrow(dds), "out of", nrow(count_matrix), "\n")
+
+#Run DESeq (estimating size factors, estimating dispersions, gene-wise dispersion estimates, mean-dispersion relationship, final dispersion estimates, fitting model and testing)
+dds <- DESeq(dds)
+
+```
+
+------------------------------------------------------------------------
+★ PRINCIPAL COMPONENT ANALYSIS (PCA) ★
+------------------------------------------------------------------------
+
+```{r}
+#Variance Stabilizing Transformation (`vst`) (needed to execute a Principal Component Analysis)
+#For RNA-seq, PCA should be performed on variance-stabilized or transformed data because raw 
+# counts are dominated by highly expressed genes.
+
+vsd <- vst(dds, blind=FALSE)
+
+#Create PCA data
+pca_data <- plotPCA(vsd, intgroup = c("Patient", "Day"), returnData=TRUE)
+percentVar <- round(100 * attr(pca_data, "percentVar"))
+
+#Create PCA plot
+pca_plot <- ggplot(pca_data, aes(x=PC1, y=PC2, color=Patient, shape=Day)) +
+  geom_point(size=4, alpha=0.9) +
+  labs(
+    title= "Principal Component Analysis (PCA) of HGSOC Organoids",
+    subtitle= "Evaluating variance structure across Patient Lines and Timepoints",
+    x=paste0("PC1: ", percentVar[1], "% variance explained"),
+    y=paste0("PC2: ", percentVar[2], "% variance explained")
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(plot.title=element_text(face="bold"))
+
+print(pca_plot)
+
+#Save PCA ggplot
+ggsave(filename = file.path(output_dir, "HGSOC_PCA_Plot.png"),
+      plot = pca_plot,
+      width = 7,
+      height = 5,
+      dpi = 300)
+
+```
+
+★ Interpretation of PCA Plot:
+    1. PC1 (38%) and PC2 (24%) explain 62% of the total variation in gene expression. 
+    2. PC1 (38%) is likely driven by inter-patient genetic heterogeneity.
+    3. PC2 (24%) is likely driven by laboratory/in vitro adaptation and metabolic reprogramming.
+    4. Samples cluster primarily by patient, indicating patient-specific differences are the major source of variation.
+    5. Day 0 and Day 6 samples from the same patient remain closely grouped, showing good biological consistency.
+    6. All Day 6 samples shift upward along PC2, suggesting a shared temporal or treatment-related transcriptional response.
+    7. Gene expression changes occur between Day 0 and Day 6 in all patients, indicating a common transcriptomic response over time.
+    8. Patient-specific expression patterns are maintained over time, indicating organoids preserve the molecular characteristics of the original tumors.
+------------------------------------
+
+------------------------------------------------------------------------
+★ EXTRACTION OF DIFFERENTIAL EXPRESSION RESULTS & VOLCANO PLOT ★
+------------------------------------------------------------------------
+
+```{r}
+#Extract Differential Expression results comparing Day6 v. Day0 baseline
+res <- results(dds, contrast = c("Day", "Day_6", "Day_0"))
+
+#Convert to tidy dataframe for ggplot compatibility
+res_df <- as.data.frame(res) %>%
+  mutate(Significance = case_when(
+    padj < 0.05 & log2FoldChange > 1 ~ "Upregulated Genes (Day6)",
+    padj < 0.05 & log2FoldChange < -1 ~ "Downregulated Genes (Day6)",
+    TRUE  ~ "Not Significant"
+  ))
+
+#Plot ggplot
+volcano_plot <- ggplot(res_df, aes(x=log2FoldChange, y=-log10(padj), color=Significance)) +
+  geom_point(alpha = 0.6, size = 1.5) +
+  scale_color_manual(values =c(
+    "Upregulated Genes (Day6)" = "firebrick3",
+    "Downregulated Genes (Day6)" = "dodgerblue3",
+    "Not Significant" = "grey60"
+  )) + 
+  geom_hline(yintercept=-log10(0.05), linetype="dashed", color="black", alpha=0.7) +
+  geom_vline(xintercept= c(-1, 1), linetype="dashed", color="black", alpha=0.7) +
+  labs(
+    title= "Volcano Plot of Differential Gene Expression",
+    subtitle= "HGSOC Patient Organoids: Day 6 v. Day 0 Baseline",
+    x = "Log2 fold Change (LFC)",
+    y = "-Log10 Adjusted p-value (FDR)"
+  ) +
+  theme_minimal(base_size=13) +
+  theme(
+    legend.position="bottom",
+    plot.title = element_text(face="bold")
+  )
+
+print(volcano_plot)
+
+#Save ggplot
+ggsave(filename = file.path(output_dir, "HGSOC_Volcano_Plot.png"),
+      plot = volcano_plot,
+      width = 7,
+      height = 6,
+      dpi = 300)
+
+```
+
+★ Interpretation of Volcano Plot:
+    1. This plot is the result of a paired differential expression analysis across the entire cohort (i.e., all patient organoids (A778, A820, A870, and A899) analyzed simultaneously).
+    2. The plot groups all the Day 0 baseline samples together and compares them directly against all the Day 6 samples
+    3. Shows the transcriptomic changes that happen to all HGSOC organoids as they transition from Day 0 to Day 6 in culture
+    4. Each dot representss a gene's avg. expression across entire patient group. 
+------------------------------------
+
+------------------------------------------------------------------------
+★ TOP 100 DEGs HEATMAP ★
+------------------------------------------------------------------------ 
+```{r}
+#Subset the top 100 DEGs by significance
+top_100_DEG <- res_df %>%
+  filter(!is.na(padj)) %>%
+  arrange(padj) %>%
+  head(100) %>%
+  rownames()
+
+#Variance stabilization
+vsd <- vst(dds, blind = FALSE)
+heatmap_mat_100 <- assay(vsd)[top_100_DEG, ]
+
+#Add column annotations
+annotation_col <- data.frame(Day = dds$Day)
+rownames(annotation_col) <- colnames(dds)
+
+ann_colors <- list(
+  Day = c(Day_0 = "grey80", Day_6 = "limegreen")
+)
+
+#Plot and Save Heatmap
+pheatmap(
+  mat = heatmap_mat_100,
+  scale = "row",
+  clustering_distance_rows = "euclidean",
+  clustering_distance_cols = "euclidean",
+  clustering_method = "complete",
+  annotation_col = annotation_col,
+  annotation_colors = ann_colors,
+  show_colnames = FALSE,
+  show_rownames = FALSE,
+  legend = TRUE,
+  annotation_legend = TRUE,
+  main = "Top 100 Differentially Expressed Genes - Day 6 v. Day 0 Baseline",
+  color = colorRampPalette(c("dodgerblue3", "white", "firebrick3"))(50),
+  filename = file.path(output_dir, "HGSOC_Top_100_DEGs_Heatmap.png"),
+  width = 6.5,
+  height = 9.8
+)
+
+# custom_legend <- "Color Key Interpretation:\n• Deep Red (+2): High Expression (Upregulated / turned 'on' relative to the gene's average across all samples).\n• White (0): Average Expression (Baseline average level across all samples).\n• Deep Blue (-2): Low Expression (Downregulated / turned 'off' relative to the gene's average)."
+# mtext(custom_legend, side = 1, line = -2, adj = 0, cex = 0.8, font = 3)
+# dev.off()
+```
+
+★ Interpretation:
+    1. Each column represents a patient’s organoid sample.
+    2. Each row represents one of the top 100 most statistically significant genes determined DESeq2.
+    3. Dendrogram groups them based on transcriptomic similarity.
+    4. Left dendrogram = splits the 100 genes into two clear patterns, a top block of genes upregulated at Day 6 (~60%) and a bottom block of genes downregulated at Day 6 (~40%).
+    5. Top dendrogram = cluster samples perfectly by timepoint (Day 6 & Day 0)
+
+★ Colour Key Interpretation:
+    1. Colours represent relative expression variations (Z-scores).
+    2. Deep Red (+2): High Expression (Upregulated / turned 'on' relative to the gene's average across all samples).
+    3. White (0): Average Expression (Baseline average level across all samples).
+    4. Deep Blue (-2): Low Expression (Downregulated / turned 'off' relative to the gene's average).
+------------------------------------
+
+------------------------------------------------------------------------
+★ SIGNIFICANCE EXTRACTION & MULTIPLE TESTING CORRECTION ★
+------------------------------------------------------------------------ 
+
+```{r}
+#Top 10 Upregulated Genes (i.e., those with the highest significance + positive LFC)
+top_upreg_genes <- res %>%
+  as.data.frame() %>%
+  filter(padj < 0.05 & log2FoldChange > 1) %>%
+  arrange(padj) %>%
+  head(10)
+
+#Top 10 Downregulated Genes (i.e., those with the highest significance + negative LFC)
+top_downreg_genes <- res %>%
+  as.data.frame() %>%
+  filter(padj < 0.05 & log2FoldChange < -1) %>%
+  arrange(padj) %>%
+  head(10)
+
+print(top_upreg_genes)
+print(top_downreg_genes)
+
+```
+
+★ TOP UPREGULATED GENES (at Day 6) = these are genes that are turned "on" or significantly increased at Day 6 compared to Day 0.
+                    baseMean log2FoldChange     lfcSE     stat       pvalue     padj
+ENSG00000087586.17 1275.2146       2.063672 0.1508298 13.68213 1.298415e-42   6.986337e-39
+ENSG00000163220.10 2419.6719       2.443184 0.1793069 13.62571 2.816527e-42   1.136610e-38
+ENSG00000134824.13 3183.0934       2.618608 0.2165631 12.09166 1.168955e-33   2.695609e-30
+ENSG00000170485.16 2578.4804       1.993496 0.1692591 11.77778 5.081476e-32   9.113909e-29
+ENSG00000101670.11  393.2018       2.996363 0.2593585 11.55298 7.130573e-31   1.151017e-27
+ENSG00000197635.9   222.3187       2.946951 0.2600788 11.33099 9.215300e-30   9.916891e-27
+ENSG00000100985.7   378.9614       5.936808 0.5372668 11.05002 2.191719e-28   2.211170e-25
+ENSG00000164611.12  912.2410       1.535121 0.1435565 10.69350 1.091689e-26   9.274756e-24
+ENSG00000099194.5  8434.6822       3.061301 0.2910823 10.51696 7.216472e-26   5.547061e-23
+ENSG00000112494.9   133.2646       3.661387 0.3485185 10.50557 8.142575e-26   5.974429e-23
+
+★ TOP DOWNREGULATED GENES (at Day 6) = these are genes that are turned "off" or significantly decreased at Day 6 compared to Day 0.
+                    baseMean log2FoldChange     lfcSE      stat        pvalue     padj
+ENSG00000125740.13 1729.7785      -6.603510 0.2944237 -22.42859 2.070793e-111   3.342673e-107
+ENSG00000085741.12  351.9082      -4.812620 0.3394333 -14.17840  1.246603e-45   1.006133e-41
+ENSG00000149043.16  676.5197      -3.090101 0.2453940 -12.59241  2.324779e-36   7.505316e-33
+ENSG00000018280.16  130.4029      -4.933332 0.4024633 -12.25784  1.525018e-34   4.102808e-31
+ENSG00000171223.5  2533.9503      -1.583497 0.1332506 -11.88360  1.440292e-32   2.906150e-29
+ENSG00000170345.9  2159.0696      -3.570071 0.3101179 -11.51198  1.148079e-30   1.684753e-27
+ENSG00000120738.7  1513.4489      -3.828581 0.3366688 -11.37195  5.768308e-30   7.759336e-27
+ENSG00000167552.13 2211.9396      -1.752896 0.1543408 -11.35730  6.821759e-30   8.470526e-27
+ENSG00000124249.6   594.7514      -2.059304 0.1816870 -11.33435  8.868938e-30   9.916891e-27
+ENSG00000203747.10  185.5941      -3.008492 0.2744061 -10.96365  5.714921e-28   5.426486e-25
+
+# Ensembl gene IDs (ENSG00000087586.17) & gene symbols (e.g., AURKA)
+Top Upregulated Genes = ENSG00000087586 (AURKA), ENSG00000163220 (S100A9), ENSG00000134824(FANCI), ENSG00000170485(NPAT), ENSG00000101670(LIPG), ENSG00000197635(DPP4), ENSG00000100985(MMP25), ENSG00000164611(PTTG1), ENSG00000099194(SCD), ENSG00000112494(SLC16A7)
+Top Downregulated Genes = ENSG00000125740(FOSB), ENSG00000085741(MGMT), ENSG00000149043(SYT1), ENSG00000018280(SLC11A1), ENSG00000171223(JUN),  ENSG00000170345(FOS), ENSG00000120738(EGR1), ENSG00000167552(TUBA1A), ENSG00000124249(KIF5C),  ENSG00000203747(CXCL8)
+------------------------------------
+
+------------------------------------------------------------------------
+★ UNSUPERVISED CLUSTERING & QUALITY CONTROL ★
+------------------------------------------------------------------------
+
+```{r}
+# Apply Variance Stabilization Testing (VST) (i.e., normalize the data so that the variance is not dominated by high-expression genes). This is essential for plotting QC PCA below. 
+vsd <- vst(dds, blind = FALSE)
+
+vsd_mat <- assay(vsd) #transformed expression matrix
+
+# Plot PCA to assess global transcriptomic variation
+pcaData <- plotPCA(
+  vsd,
+  intgroup = "Day",
+  returnData = TRUE
+)
+
+#Calculate PCA1 and PC2 percentage variance
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+#Plot QC PCA
+qc_pca <- ggplot(pcaData, aes(
+  x = PC1,
+  y = PC2,
+  color = Day
+)) +
+  geom_point(size = 4) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  ggtitle("PCA Plot of HGSOC Organoid RNA-seq Samples") +
+  theme_classic()
+
+print(qc_pca)
+```
+
+★ Interpretation of QC PCA Plot: 
+    1. Demonstrates global transcriptomic differences between Day 0 and Day 6 samples.
+
+```{r}
+# Create Sample Distance Matrix (for following heatmap)
+sampleDists <- dist(t(assay(vsd))) #calculating math distance between entire transcriptomes will cause mislabeled samples to stick out. 
+sampleDistMatrix <- as.matrix(sampleDists)
+
+rownames(sampleDistMatrix) <- colnames(vsd)
+colnames(sampleDistMatrix) <- colnames(vsd)
+
+# Heatmap visualizing sample similarity.
+# As opposed to Top 100 DEGs heatmap (supervised), this sample distance heatmap (unsupervised) measures all genes in this cohort.
+
+pheatmap(
+  sampleDistMatrix,
+  annotation_col = as.data.frame(colData(vsd)[, "Day", drop = FALSE]),
+  main = "Sample Distance Heatmap",
+  filename = file.path(output.dir, "Sample_Distance_Heatmap.png")
+)
+```
+
+★ Interpretation of QC Sample Distance Heatmap: 
+    1. Colours represent the euclidean distance (i.e., mathematical distance between transcriptomes)
+    2. Demonstrates sample similarity, clustering of replicates, and absence of obvious outliers.
+    3. Individual patient organoids cluster strictly with their own matching timepoint (e.g., A820_D0 pairs with A820_D6). The tight pairing proves that the organoids successfully retain their unique, patient-specific molecular characteristics over time in the lab.
+    4. This heatmap is perfect for QC because, the perfect grouping of patient pairs proves excellent data integrity with zero sample tracking mix-ups or cross-contamination during lab or sequencing steps.
+    5. Experimental groups maintain a clean, global transcriptomic separation. 
+    6. The solid blue diagonal line passing through the matrix represents a mathematical distance of 0, where each sample is compared directly to itself.
+    7. The yellow squares immediately off the diagonal line show that a patient's Day 0 and Day 6 samples remain highly similar to one another.
+    8. The large orange and dark red blocks signify high mathematical distance (100–120), highlighting just how distinct the different patient tumor lines are from each other.
+------------------------------------
+
+------------------------------------------------------------------------
+★ Biological Interpretation, Conclusion & Future Work ★
+------------------------------------------------------------------------
+
+Early in vitro cultivation of HGSOC organoids triggers a significant transcriptomic shift/metabolic reprogramming. 
+This rapid adaptation alters gene expression profiles and activates pathways tied to cell proliferation, 
+cellular survival, and tumor biology.
+
+At Day 6, the top upregulated genes (AURKA, PTTG1, FANCI and NPAT) are associated with cell proliferation, 
+DNA replication, and cell cycle progression, reflecting rapid growth in the nutrient-rich in vitro culture. 
+Conversely, the top downregulated genes (FOS, JUN, HIF1A, VEGF, and CXCL8) are associated with hypoxia response, 
+inflammation, and survival pathways.  This transcriptomic change confirms the organoids successfully stabilized, 
+relieving the intense microenvironmental, cellular, and hypoxic stresses experienced in vivo. 
+
+Instead of tracking individual gene fluctuations, future studies could utilize pathway enrichment analysis 
+(GO/KEGG/GSEA) to investigate which systemic biological pathways are activated or suppressed as tumor cells adapt 
+from the in vivo microenvironment (Day 0) to in vitro culture conditions (Day 6). 
+
+------------------------
+★ AI DECLARATION ★
+------------------------
+ChatGPT was used to:
+    1. Troubleshoot installing packages.
+    2. Convert Ensembl gene IDs (e.g., ENSG00000087586.17) to gene symbols (e.g., AURKA).
+    3. Refine our code comments. 
+    4. Get a better understanding of R functions such as "colorRampPalette", "set.seed", and "purrr::reduce".

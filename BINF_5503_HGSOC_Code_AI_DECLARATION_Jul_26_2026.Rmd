@@ -1,0 +1,14 @@
+BINF 5503 - Data Analytics & Storytelling
+R Code for HGSOC Project
+Blair Steele 
+Ayushi Piplodiya
+July 28, 2026
+
+------------------------
+★ AI DECLARATION ★
+------------------------
+ChatGPT was used to:
+    1. Troubleshoot installing packages.
+    2. Convert Ensembl gene IDs (e.g., ENSG00000087586.17) to gene symbols (e.g., AURKA).
+    3. Refine our code comments. 
+    4. Get a better understanding of R functions such as "colorRampPalette", "set.seed", and "purrr::reduce".
